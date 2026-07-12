@@ -13,6 +13,9 @@ jobs:
   update:
     runs-on: ubuntu-latest
     timeout-minutes: 6
+    env:
+      # secrets are not allowed in step-level `if:`; route through job env instead
+      HAS_HOYO: ${{ secrets.HOYO_LTUID_V2 != '' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -21,13 +24,13 @@ jobs:
       # Runs only if you set the HOYO_LTUID_V2 secret. Produces hoyo_stats.json,
       # which hsrUser.js merges into the same single Discord PATCH.
       - name: Setup Python
-        if: ${{ secrets.HOYO_LTUID_V2 != '' }}
+        if: env.HAS_HOYO == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
       - name: Fetch HoyoLab battle stats (optional)
-        if: ${{ secrets.HOYO_LTUID_V2 != '' }}
+        if: env.HAS_HOYO == 'true'
         env:
           HSR_UID: ${{ secrets.HSR_UID }}
           HOYO_LTUID_V2: ${{ secrets.HOYO_LTUID_V2 }}
