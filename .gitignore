@@ -1,0 +1,5 @@
+.env
+node_modules/
+hoyo_stats.json
+__pycache__/
+*.pyc
