@@ -1,0 +1,2 @@
+genshin>=1.7.0
+rsa
