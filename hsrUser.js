@@ -1,0 +1,269 @@
+// =====================================================================
+//  Honkai: Star Rail — Discord Dynamic Profile Widget updater
+//  Port of MeYashverma/Genshin-Stats (enkaUser.js) for HSR.
+//
+//  Tier A (this file, NO login required):
+//    Pulls PUBLIC stats from Enka.Network's HSR endpoint and a rotating
+//    showcase character from your in-game profile. No HoyoLab cookie.
+//
+//  Tier B (optional): if a `hoyo_stats.json` file exists next to this
+//    script (produced by optional-hoyolab/hsr_hoyolab.py), the Memory of
+//    Chaos / Pure Fiction / Apocalyptic Shadow fields are merged into the
+//    same single Discord PATCH. See README.
+// =====================================================================
+
+if (process.env.GITHUB_ACTIONS !== "true") {
+    require("dotenv").config();
+}
+const axios = require("axios");
+const fs = require("fs");
+const path = require("path");
+
+// ---- config -----------------------------------------------------------
+const HSR_UID = process.env.HSR_UID;
+const ENKA_HSR_URL = `https://enka.network/api/hsr/uid/${HSR_UID}`;
+
+// StarRailRes (Mar-7th): community-standard asset index, keyed directly by
+// avatarId. Auto-updates for new characters — nothing to maintain locally.
+const SRRES_BASE = "https://raw.githubusercontent.com/Mar-7th/StarRailRes/master/";
+const SRRES_CHARS_URL = `${SRRES_BASE}index_min/en/characters.json`;
+
+// Enka HSR profile-picture map (only used as a fallback image).
+const ENKA_PFPS_URL =
+    "https://raw.githubusercontent.com/EnkaNetwork/API-docs/master/store/hsr/pfps.json";
+const ENKA_UI_BASE = "https://enka.network"; // pfp iconPath already starts with /ui/hsr/...
+
+const DISCORD_CLIENT_ID = process.env.DISCORD_CLIENT_ID;
+const DISCORD_USER_ID = process.env.DISCORD_USER_ID;
+const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN;
+
+// How often the displayed character rotates (in hours). Should match (or be
+// a multiple of) the GitHub Actions cron schedule.
+const ROTATE_HOURS = Number(process.env.ROTATE_HOURS ?? 6);
+
+// Enka asks API consumers to send a descriptive User-Agent.
+const UA = { "User-Agent": "HSR-Stats-Widget/1.0 (+github-actions)" };
+
+// ---- region formatting ------------------------------------------------
+const regionMap = {
+    ASIA: "Asia",
+    EUR: "Europe",
+    EUROPE: "Europe",
+    USA: "America",
+    AMERICA: "America",
+    CHT: "TW/HK/MO",
+    CN: "China",
+};
+
+// =====================================================================
+// SHOWCASED CHARACTER (rotating portrait + name label)
+// =====================================================================
+async function getShowcasedCharacter(detail) {
+    try {
+        const showcase = detail.avatarDetailList ?? [];
+        let showcased = null;
+
+        if (showcase.length > 0) {
+            // Time-based slot: no state file needed, each scheduled run
+            // lands on the next showcase slot.
+            const rotationIndex =
+                Math.floor(Date.now() / (ROTATE_HOURS * 3600 * 1000)) % showcase.length;
+            showcased = showcase[rotationIndex];
+            console.log(
+                `Rotation: slot ${rotationIndex + 1}/${showcase.length} (changes every ${ROTATE_HOURS}h)`
+            );
+        }
+
+        if (showcased) {
+            const { data: chars } = await axios.get(SRRES_CHARS_URL, { timeout: 10000, headers: UA });
+            const c = chars[String(showcased.avatarId)];
+
+            if (c) {
+                // Trailblazer entries store the name as "{NICKNAME}".
+                let name = c.name;
+                if (!name || name.includes("{NICKNAME}")) {
+                    name = detail.nickname || "Trailblazer";
+                }
+
+                // Big splash art. Swap `portrait` -> `preview` or `icon` for
+                // a tighter crop.
+                const imageUrl = c.portrait ? `${SRRES_BASE}${c.portrait}` : null;
+
+                return {
+                    imageUrl,
+                    name,
+                    level: showcased.level ?? null,
+                    eidolon: showcased.rank ?? 0, // rank == eidolon; absent means 0
+                };
+            }
+        }
+
+        // Fallback: player's in-game profile picture via Enka's HSR pfp map.
+        const pfpId = detail.headIcon;
+        if (pfpId) {
+            const { data: pfps } = await axios.get(ENKA_PFPS_URL, { timeout: 10000, headers: UA });
+            const iconPath = pfps[String(pfpId)]?.Icon;
+            if (iconPath) {
+                return { imageUrl: `${ENKA_UI_BASE}${iconPath}`, name: null, level: null, eidolon: 0 };
+            }
+        }
+
+        return { imageUrl: null, name: null, level: null, eidolon: 0 };
+    } catch (err) {
+        console.warn("Could not resolve character image:", err.message);
+        return { imageUrl: null, name: null, level: null, eidolon: 0 };
+    }
+}
+
+// =====================================================================
+// OPTIONAL TIER B: merge HoyoLab battle stats if the helper produced them
+// =====================================================================
+const HOYO_STATS_MAX_AGE_H = Number(process.env.HOYO_STATS_MAX_AGE_H ?? 48);
+
+function readHoyoStats() {
+    try {
+        const p = path.join(__dirname, "hoyo_stats.json");
+        if (!fs.existsSync(p)) return null;
+        const data = JSON.parse(fs.readFileSync(p, "utf8"));
+
+        // Freshness guard: if the Python step has been failing (e.g. expired
+        // cookie) a stale committed file shouldn't show outdated clears.
+        if (data.generated_at) {
+            const ageH = (Date.now() / 1000 - data.generated_at) / 3600;
+            if (ageH > HOYO_STATS_MAX_AGE_H) {
+                console.warn(
+                    `hoyo_stats.json is ${ageH.toFixed(1)}h old (limit ${HOYO_STATS_MAX_AGE_H}h) — ` +
+                    "skipping clear stats. Is the HoyoLab cookie expired?"
+                );
+                return null;
+            }
+        }
+
+        console.log("Found hoyo_stats.json — merging MoC/PF/APC fields.");
+        return data;
+    } catch (e) {
+        console.warn("Could not read hoyo_stats.json:", e.message);
+        return null;
+    }
+}
+
+// =====================================================================
+async function syncHsrStats() {
+    try {
+        const res = await axios.get(ENKA_HSR_URL, { timeout: 10000, headers: UA });
+        const detail = res.data.detailInfo;
+        if (!detail) throw new Error("Player profile is private or not found.");
+
+        const rec = detail.recordInfo ?? {};
+        const region = regionMap[res.data.region] ?? res.data.region ?? "Unknown";
+
+        // ---- resolve rotating character -------------------------------
+        const character = await getShowcasedCharacter(detail);
+        const { imageUrl } = character;
+        const characterLabel = character.name
+            ? `${character.name}${character.level ? ` • Lv. ${character.level}` : ""}` +
+              `${character.eidolon ? ` • E${character.eidolon}` : ""}`
+            : null;
+
+        if (imageUrl) console.log(`Character image: ${imageUrl}`);
+        if (characterLabel) console.log(`Character: ${characterLabel}`);
+
+        const signature =
+            detail.signature && detail.signature.trim() !== ""
+                ? `"${detail.signature.substring(0, 60)}"`
+                : '"No signature"';
+
+        const su =
+            rec.maxRogueChallengeScore != null && rec.maxRogueChallengeScore > 0
+                ? `World ${rec.maxRogueChallengeScore}`
+                : "—";
+
+        // ---- build the Discord dynamic payload ------------------------
+        // type 1 = text, 2 = number, 3 = image
+        const dynamic = [
+            { type: 1, name: "nickname", value: detail.nickname ?? "Trailblazer" },
+            { type: 1, name: "uid", value: `UID ${HSR_UID}` },
+            { type: 1, name: "world", value: `${region} • EQ ${detail.worldLevel ?? "-"}` },
+
+            { type: 1, name: "tb_str", value: "Trailblaze Level" },
+            { type: 2, name: "tb", value: detail.level ?? 0 },
+
+            { type: 1, name: "eq_str", value: "Equilibrium" },
+            { type: 2, name: "eq", value: detail.worldLevel ?? 0 },
+
+            { type: 1, name: "ach_str", value: "Achievements" },
+            { type: 1, name: "ach", value: String(rec.achievementCount ?? "-") },
+
+            { type: 1, name: "su_str", value: "Simulated Universe" },
+            { type: 1, name: "su", value: su },
+
+            { type: 1, name: "col_str", value: "Collection" },
+            {
+                type: 1,
+                name: "col",
+                value: `${rec.avatarCount ?? "-"} chars • ${rec.equipmentCount ?? "-"} LCs`,
+            },
+
+            { type: 1, name: "sig", value: signature },
+            { type: 1, name: "mini", value: `${detail.nickname ?? "TB"}: TB ${detail.level ?? "-"}` },
+        ];
+
+        // ---- Tier B: MoC / Pure Fiction / Apocalyptic Shadow ----------
+        const hoyo = readHoyoStats();
+        if (hoyo) {
+            if (hoyo.moc) {
+                dynamic.push({ type: 1, name: "moc_str", value: "Memory of Chaos" });
+                dynamic.push({ type: 1, name: "moc", value: hoyo.moc }); // e.g. "Floor 12 (36★)"
+            }
+            if (hoyo.pf) {
+                dynamic.push({ type: 1, name: "pf_str", value: "Pure Fiction" });
+                dynamic.push({ type: 1, name: "pf", value: hoyo.pf });
+            }
+            if (hoyo.apc) {
+                dynamic.push({ type: 1, name: "apc_str", value: "Apocalyptic Shadow" });
+                dynamic.push({ type: 1, name: "apc", value: hoyo.apc });
+            }
+            if (hoyo.aa) {
+                dynamic.push({ type: 1, name: "aa_str", value: "Anomaly Arbitration" });
+                dynamic.push({ type: 1, name: "aa", value: hoyo.aa }); // e.g. "14★ • Gold"
+            }
+            if (hoyo.active_days != null) {
+                dynamic.push({ type: 1, name: "days_str", value: "Active Days" });
+                dynamic.push({ type: 2, name: "days", value: hoyo.active_days });
+            }
+        }
+
+        if (imageUrl) {
+            dynamic.push({ type: 3, name: "image", value: { url: imageUrl } });
+        }
+        if (characterLabel) {
+            dynamic.push({ type: 1, name: "char", value: characterLabel });
+        }
+
+        const payload = { data: { dynamic } };
+
+        // ---- PATCH the Discord widget ---------------------------------
+        const discordApiUrl =
+            `https://discord.com/api/v9/applications/${DISCORD_CLIENT_ID}` +
+            `/users/${DISCORD_USER_ID}/identities/0/profile`;
+
+        const response = await axios.patch(discordApiUrl, payload, {
+            headers: {
+                Authorization: `Bot ${DISCORD_BOT_TOKEN}`,
+                "Content-Type": "application/json",
+            },
+        });
+
+        console.log(`Synced HSR widget for ${detail.nickname}. Status: ${response.status}`);
+    } catch (error) {
+        if (error.response) {
+            console.error("Discord/Enka API Error:", error.response.status, error.response.data);
+            process.exit(1);
+        } else {
+            console.error("Request Error:", error.message);
+            process.exit(1);
+        }
+    }
+}
+
+syncHsrStats();
