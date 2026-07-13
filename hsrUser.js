@@ -116,6 +116,22 @@ async function getShowcasedCharacter(detail) {
 }
 
 // =====================================================================
+// ACHIEVEMENT TOTAL: count of all possible achievements (StarRailRes index,
+// auto-updates each game version). Used to render "797/912".
+// =====================================================================
+async function getAchievementTotal() {
+    try {
+        const { data } = await axios.get(`${SRRES_BASE}index_min/en/achievements.json`,
+            { timeout: 15000, headers: UA });
+        const n = Object.keys(data ?? {}).length;
+        return n > 0 ? n : null;
+    } catch (e) {
+        console.warn("Achievement total unavailable:", e.message);
+        return null; // fall back to plain earned count
+    }
+}
+
+// =====================================================================
 // OPTIONAL TIER B: merge HoyoLab battle stats if the helper produced them
 // =====================================================================
 const HOYO_STATS_MAX_AGE_H = Number(process.env.HOYO_STATS_MAX_AGE_H ?? 48);
@@ -178,6 +194,12 @@ async function syncHsrStats() {
                 ? `World ${rec.maxRogueChallengeScore}`
                 : "—";
 
+        // Achievements as earned/total (total from StarRailRes; may be null)
+        const achTotal = await getAchievementTotal();
+        const achValue = achTotal
+            ? `${rec.achievementCount ?? "-"}/${achTotal}`
+            : String(rec.achievementCount ?? "-");
+
         // ---- build the Discord dynamic payload ------------------------
         // type 1 = text, 2 = number, 3 = image
         const dynamic = [
@@ -192,7 +214,7 @@ async function syncHsrStats() {
             { type: 2, name: "eq", value: detail.worldLevel ?? 0 },
 
             { type: 1, name: "ach_str", value: "Achievements" },
-            { type: 1, name: "ach", value: String(rec.achievementCount ?? "-") },
+            { type: 1, name: "ach", value: achValue },
 
             { type: 1, name: "su_str", value: "Simulated Universe" },
             { type: 1, name: "su", value: su },
@@ -243,6 +265,8 @@ async function syncHsrStats() {
             if (hoyo.active_days != null) {
                 dynamic.push({ type: 1, name: "days_str", value: "Active Days" });
                 dynamic.push({ type: 2, name: "days", value: hoyo.active_days });
+                // Text slots can't resolve number fields — bind this one instead:
+                dynamic.push({ type: 1, name: "days_txt", value: String(hoyo.active_days) });
             }
         }
 
