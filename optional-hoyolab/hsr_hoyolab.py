@@ -71,27 +71,76 @@ def _score(mode) -> str | None:
     return f"{score:,} pts" if score else None
 
 
-def _fmt_anomaly_raw(data) -> str | None:
-    """Format Anomaly Arbitration from the RAW API payload, e.g. '14⭐ • Gold'.
+def _season_name(mode) -> str:
+    """Current season's display name, e.g. 'Gale of Forgetting'."""
+    seasons = getattr(mode, "seasons", None) or []
+    if seasons:
+        return (getattr(seasons[0], "name", "") or "").strip()
+    return (getattr(mode, "name", "") or "").strip()
 
-    Raw parsing sidesteps model-validation failures and lets us print
-    exactly what the API returned when no record is found.
+
+def _cycles(mode) -> int:
+    """Total cycles used across all cleared floors (MoC/PF; APC is AV-based)."""
+    return sum((getattr(f, "round_num", 0) or 0) for f in (getattr(mode, "floors", None) or []))
+
+
+def _detail(mode, key) -> str | None:
+    """Label line: 'Season Name • 12⭐/12⭐ • 115,640 pts • 7 cycles'."""
+    if mode is None or getattr(mode, "has_data", True) is False:
+        return None
+    parts = []
+    if (name := _season_name(mode)):
+        parts.append(name)
+    if (stars := _fmt(mode, key)):
+        parts.append(stars)
+    if key in ("pf", "apc") and (pts := _score(mode)):
+        parts.append(pts)
+    if key in ("moc", "pf") and (c := _cycles(mode)):
+        parts.append(f"{c} cycles")
+    return " • ".join(parts) if parts else None
+
+
+def _anomaly_parts(data) -> tuple[str | None, str | None]:
+    """Parse Anomaly Arbitration from the RAW API payload.
+
+    Returns (total, detail):
+      total  -> '7⭐' or '12⭐ • Gold' (mob + boss stars, medal if earned)
+      detail -> 'Season • Knights 6⭐/9⭐ • King 1⭐ • 5 cycles'
+                (knight stages 1-3 = mob_stars, max 9; king = boss_stars;
+                 cycles = battle_num of the current season's record)
+
+    Prefers the newest season RECORD so season/stars/cycles describe the
+    same run; falls back to the best-record brief if no records exist.
     """
     if not data:
         print("Anomaly Arbitration: API returned an empty payload.")
-        return None
+        return None, None
+
+    rec = next((r for r in (data.get("challenge_peak_records") or [])
+                if r.get("has_challenge_record")), None)
     brief = data.get("challenge_peak_best_record_brief") or {}
-    stars = (brief.get("boss_stars") or 0) + (brief.get("mob_stars") or 0)
-    medal = (brief.get("challenge_peak_rank_icon_type") or "").replace("_", " ").strip().title()
-    if stars or medal:
-        return f"{stars}⭐ • {medal}" if medal else f"{stars}⭐"
-    # No best-record brief: fall back to the newest season record with data.
-    for r in (data.get("challenge_peak_records") or []):
-        if r.get("has_challenge_record"):
-            s = (r.get("boss_stars") or 0) + (r.get("mob_stars") or 0)
-            return f"{s}⭐"
-    print("Anomaly Arbitration: no clear record in response; keys:", list(data.keys()))
-    return None
+    src = rec if rec is not None else brief
+
+    mob = src.get("mob_stars") or 0
+    boss = src.get("boss_stars") or 0
+    medal_raw = (((rec or {}).get("boss_record") or {}).get("challenge_peak_rank_icon_type")
+                 or brief.get("challenge_peak_rank_icon_type") or "")
+    medal = medal_raw.replace("_", " ").strip().title()
+    if not (mob or boss or medal):
+        print("Anomaly Arbitration: no clear record in response; keys:", list(data.keys()))
+        return None, None
+
+    total = f"{mob + boss}⭐ • {medal}" if medal else f"{mob + boss}⭐"
+
+    parts = []
+    season = (((rec or {}).get("group") or {}).get("name_mi18n") or "").strip()
+    if season:
+        parts.append(season)
+    parts.append(f"Knights {mob}⭐/9⭐ • King {boss}⭐")
+    cycles = (rec or {}).get("battle_num") or 0
+    if cycles:
+        parts.append(f"{cycles} cycles")
+    return total, " • ".join(parts)
 
 
 async def _grab(label: str, coro, out: dict, key: str, fmt=_fmt) -> None:
@@ -149,34 +198,35 @@ async def main() -> None:
 
     out: dict = {"generated_at": int(time.time())}
 
-    # Clear stats: current-season Memory of Chaos / Pure Fiction / Apocalyptic
-    # Shadow. previous=True variants exist if you ever want last season.
-    await _grab("Memory of Chaos", client.get_starrail_challenge(uid), out, "moc",
-                fmt=lambda m: _fmt(m, "moc"))
+    # Clear stats. For each mode we emit:
+    #   <key>        stars, e.g. "12⭐/12⭐"          (bind as Value)
+    #   <key>_pts    top-stage score (PF/APC only)
+    #   <key>_detail "Season • stars • pts • cycles"  (bind as Label)
+    async def mode_fields(label, coro, key):
+        res = {}
+        await _grab(label, coro, res, "mode", fmt=lambda m: m)
+        mode = res.get("mode")
+        if mode is None:
+            return
+        if (v := _fmt(mode, key)):
+            out[key] = v
+        if key in ("pf", "apc") and (p := _score(mode)):
+            out[f"{key}_pts"] = p
+        if (d := _detail(mode, key)):
+            out[f"{key}_detail"] = d
 
-    # PF / APC: stars in `pf`/`apc`, total score separately in `pf_pts`/`apc_pts`
-    # so the widget can show points as the label under the star value.
-    pf_res = {}
-    await _grab("Pure Fiction", client.get_starrail_pure_fiction(uid), pf_res, "mode",
-                fmt=lambda m: m)
-    if pf_res.get("mode") is not None:
-        if (v := _fmt(pf_res["mode"], "pf")):
-            out["pf"] = v
-        if (p := _score(pf_res["mode"])):
-            out["pf_pts"] = p
-
-    apc_res = {}
-    await _grab("Apocalyptic Shadow", client.get_starrail_apc_shadow(uid), apc_res, "mode",
-                fmt=lambda m: m)
-    if apc_res.get("mode") is not None:
-        if (v := _fmt(apc_res["mode"], "apc")):
-            out["apc"] = v
-        if (p := _score(apc_res["mode"])):
-            out["apc_pts"] = p
-    await _grab(
-        "Anomaly Arbitration", client.get_anomaly_arbitration(uid, raw=True), out, "aa",
-        fmt=_fmt_anomaly_raw,
-    )
+    await mode_fields("Memory of Chaos", client.get_starrail_challenge(uid), "moc")
+    await mode_fields("Pure Fiction", client.get_starrail_pure_fiction(uid), "pf")
+    await mode_fields("Apocalyptic Shadow", client.get_starrail_apc_shadow(uid), "apc")
+    aa_res = {}
+    await _grab("Anomaly Arbitration", client.get_anomaly_arbitration(uid, raw=True),
+                aa_res, "raw", fmt=lambda d: d)
+    if aa_res.get("raw") is not None:
+        total, detail = _anomaly_parts(aa_res["raw"])
+        if total:
+            out["aa"] = total
+        if detail:
+            out["aa_detail"] = detail
 
     # General stats (active days etc.)
     try:
