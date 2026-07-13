@@ -55,28 +55,43 @@ def _fmt(mode, key="moc") -> str | None:
 
 
 def _score(mode) -> str | None:
-    """Total season score across all stages, e.g. '30,000 pts' (PF/APC only)."""
+    """Score of the HIGHEST stage only (stage 4 if reached), e.g. '38,000 pts'.
+
+    Early PF stages are trivially full-cleared and APC is AV-based with no
+    perfect clear, so the final stage's score is the meaningful number.
+    Falls back to the highest stage attempted if stage 4 isn't reached.
+    """
     if mode is None or getattr(mode, "has_data", True) is False:
         return None
-    score = sum((getattr(f, "score", 0) or 0) for f in (getattr(mode, "floors", None) or []))
+    floors = getattr(mode, "floors", None) or []
+    if not floors:
+        return None
+    top = max(floors, key=lambda f: getattr(f, "id", 0) or 0)  # id rises with stage
+    score = getattr(top, "score", 0) or 0
     return f"{score:,} pts" if score else None
 
 
-def _fmt_anomaly(aa) -> str | None:
-    """Format Anomaly Arbitration like '14★ • Gold' (stars + best medal)."""
-    if aa is None:
+def _fmt_anomaly_raw(data) -> str | None:
+    """Format Anomaly Arbitration from the RAW API payload, e.g. '14⭐ • Gold'.
+
+    Raw parsing sidesteps model-validation failures and lets us print
+    exactly what the API returned when no record is found.
+    """
+    if not data:
+        print("Anomaly Arbitration: API returned an empty payload.")
         return None
-    s = getattr(aa, "summary", None)  # best-record brief
-    if s is not None:
-        stars = getattr(s, "boss_stars", 0) + getattr(s, "mini_boss_stars", 0)
-        medal = (getattr(s, "medal_type", "") or "").replace("_", " ").strip().title()
-        return f"{stars}⭐/14⭐ • {medal}" if medal else f"{stars}⭐/14⭐"
-    # No summary yet: fall back to the most recent season record with data.
-    recs = [r for r in getattr(aa, "records", []) if getattr(r, "has_data", False)]
-    if not recs:
-        return None
-    r = recs[0]
-    return f"{getattr(r, 'boss_stars', 0) + getattr(r, 'mini_boss_stars', 0)}⭐/14⭐"
+    brief = data.get("challenge_peak_best_record_brief") or {}
+    stars = (brief.get("boss_stars") or 0) + (brief.get("mob_stars") or 0)
+    medal = (brief.get("challenge_peak_rank_icon_type") or "").replace("_", " ").strip().title()
+    if stars or medal:
+        return f"{stars}⭐ • {medal}" if medal else f"{stars}⭐"
+    # No best-record brief: fall back to the newest season record with data.
+    for r in (data.get("challenge_peak_records") or []):
+        if r.get("has_challenge_record"):
+            s = (r.get("boss_stars") or 0) + (r.get("mob_stars") or 0)
+            return f"{s}⭐"
+    print("Anomaly Arbitration: no clear record in response; keys:", list(data.keys()))
+    return None
 
 
 async def _grab(label: str, coro, out: dict, key: str, fmt=_fmt) -> None:
@@ -159,8 +174,8 @@ async def main() -> None:
         if (p := _score(apc_res["mode"])):
             out["apc_pts"] = p
     await _grab(
-        "Anomaly Arbitration", client.get_anomaly_arbitration(uid), out, "aa",
-        fmt=_fmt_anomaly,
+        "Anomaly Arbitration", client.get_anomaly_arbitration(uid, raw=True), out, "aa",
+        fmt=_fmt_anomaly_raw,
     )
 
     # General stats (active days etc.)
