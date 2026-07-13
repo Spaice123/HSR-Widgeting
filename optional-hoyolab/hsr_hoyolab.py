@@ -109,22 +109,36 @@ def _anomaly_parts(data) -> tuple[str | None, str | None]:
                 (knight stages 1-3 = mob_stars, max 9; king = boss_stars;
                  cycles = battle_num of the current season's record)
 
-    Prefers the newest season RECORD so season/stars/cycles describe the
-    same run; falls back to the best-record brief if no records exist.
+    Prefers the BEST-RECORD brief (all-time best). Season name and cycles
+    are attached from the season record that matches the brief's stars, so
+    they describe the same run; if no record matches, stars/medal show alone.
+    Falls back to the newest season record if the brief is empty.
     """
     if not data:
         print("Anomaly Arbitration: API returned an empty payload.")
         return None, None
 
-    rec = next((r for r in (data.get("challenge_peak_records") or [])
-                if r.get("has_challenge_record")), None)
+    recs = [r for r in (data.get("challenge_peak_records") or [])
+            if r.get("has_challenge_record")]
     brief = data.get("challenge_peak_best_record_brief") or {}
-    src = rec if rec is not None else brief
 
-    mob = src.get("mob_stars") or 0
-    boss = src.get("boss_stars") or 0
-    medal_raw = (((rec or {}).get("boss_record") or {}).get("challenge_peak_rank_icon_type")
-                 or brief.get("challenge_peak_rank_icon_type") or "")
+    mob = brief.get("mob_stars") or 0
+    boss = brief.get("boss_stars") or 0
+    medal_raw = brief.get("challenge_peak_rank_icon_type") or ""
+    rec = None
+    if mob or boss or medal_raw:
+        # best record: find the season record it came from (matching stars)
+        rec = next((r for r in recs
+                    if (r.get("mob_stars") or 0) == mob
+                    and (r.get("boss_stars") or 0) == boss), None)
+    elif recs:
+        # no brief: fall back to the newest season record
+        rec = recs[0]
+        mob = rec.get("mob_stars") or 0
+        boss = rec.get("boss_stars") or 0
+
+    if rec is not None and not medal_raw:
+        medal_raw = ((rec.get("boss_record") or {}).get("challenge_peak_rank_icon_type") or "")
     medal = medal_raw.replace("_", " ").strip().title()
     if not (mob or boss or medal):
         print("Anomaly Arbitration: no clear record in response; keys:", list(data.keys()))
