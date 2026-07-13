@@ -202,33 +202,21 @@ async function syncHsrStats() {
 
         // ---- build the Discord dynamic payload ------------------------
         // type 1 = text, 2 = number, 3 = image
+        // NOTE: Discord caps the number of dynamic fields (~30). Keep this
+        // list lean — unused fields (tb/eq/col/sig/mini) were removed to make
+        // room for the *_detail label lines.
         const dynamic = [
             { type: 1, name: "nickname", value: detail.nickname ?? "Trailblazer" },
             { type: 1, name: "uid", value: `UID ${HSR_UID}` },
             { type: 1, name: "world", value: `${region} • EQ ${detail.worldLevel ?? "-"}` },
-
-            { type: 1, name: "tb_str", value: "Trailblaze Level" },
-            { type: 2, name: "tb", value: detail.level ?? 0 },
-
-            { type: 1, name: "eq_str", value: "Equilibrium" },
-            { type: 2, name: "eq", value: detail.worldLevel ?? 0 },
 
             { type: 1, name: "ach_str", value: "Achievements" },
             { type: 1, name: "ach", value: achValue },
 
             { type: 1, name: "su_str", value: "Simulated Universe" },
             { type: 1, name: "su", value: su },
-
-            { type: 1, name: "col_str", value: "Collection" },
-            {
-                type: 1,
-                name: "col",
-                value: `${rec.avatarCount ?? "-"} chars • ${rec.equipmentCount ?? "-"} LCs`,
-            },
-
-            { type: 1, name: "sig", value: signature },
-            { type: 1, name: "mini", value: `${detail.nickname ?? "TB"}: TB ${detail.level ?? "-"}` },
         ];
+        void signature; // kept for potential future use
 
         // ---- Tier B: MoC / Pure Fiction / Apocalyptic Shadow ----------
         const hoyo = readHoyoStats();
@@ -264,8 +252,6 @@ async function syncHsrStats() {
             }
             if (hoyo.active_days != null) {
                 dynamic.push({ type: 1, name: "days_str", value: "Active Days" });
-                dynamic.push({ type: 2, name: "days", value: hoyo.active_days });
-                // Text slots can't resolve number fields — bind this one instead:
                 dynamic.push({ type: 1, name: "days_txt", value: String(hoyo.active_days) });
             }
         }
@@ -294,7 +280,8 @@ async function syncHsrStats() {
         console.log(`Synced HSR widget for ${detail.nickname}. Status: ${response.status}`);
     } catch (error) {
         if (error.response) {
-            console.error("Discord/Enka API Error:", error.response.status, error.response.data);
+            console.error("Discord/Enka API Error:", error.response.status,
+                JSON.stringify(error.response.data, null, 2));
             process.exit(1);
         } else {
             console.error("Request Error:", error.message);
