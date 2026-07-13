@@ -43,13 +43,23 @@ from pathlib import Path
 import genshin
 
 
-def _fmt(mode) -> str | None:
-    """Format a challenge result like 'Floor 12 (36★)'; None if no data."""
+_MAX_STARS = {"moc": 36, "pf": 12, "apc": 12}  # 12x3 / 4x3 / 4x3
+
+
+def _fmt(mode, key="moc") -> str | None:
+    """Format stars only, like '36⭐/36⭐' (MoC) or '12⭐/12⭐' (PF/APC)."""
     if mode is None or getattr(mode, "has_data", True) is False:
         return None
-    max_floor = getattr(mode, "max_floor", None) or "—"
-    stars = getattr(mode, "total_stars", None)
-    return f"{max_floor} ({stars}★)" if stars is not None else str(max_floor)
+    stars = getattr(mode, "total_stars", 0) or 0
+    return f"{stars}⭐/{_MAX_STARS.get(key, 36)}⭐"
+
+
+def _score(mode) -> str | None:
+    """Total season score across all stages, e.g. '30,000 pts' (PF/APC only)."""
+    if mode is None or getattr(mode, "has_data", True) is False:
+        return None
+    score = sum((getattr(f, "score", 0) or 0) for f in (getattr(mode, "floors", None) or []))
+    return f"{score:,} pts" if score else None
 
 
 def _fmt_anomaly(aa) -> str | None:
@@ -60,13 +70,13 @@ def _fmt_anomaly(aa) -> str | None:
     if s is not None:
         stars = getattr(s, "boss_stars", 0) + getattr(s, "mini_boss_stars", 0)
         medal = (getattr(s, "medal_type", "") or "").replace("_", " ").strip().title()
-        return f"{stars}★ • {medal}" if medal else f"{stars}★"
+        return f"{stars}⭐/14⭐ • {medal}" if medal else f"{stars}⭐/14⭐"
     # No summary yet: fall back to the most recent season record with data.
     recs = [r for r in getattr(aa, "records", []) if getattr(r, "has_data", False)]
     if not recs:
         return None
     r = recs[0]
-    return f"{getattr(r, 'boss_stars', 0) + getattr(r, 'mini_boss_stars', 0)}★"
+    return f"{getattr(r, 'boss_stars', 0) + getattr(r, 'mini_boss_stars', 0)}⭐/14⭐"
 
 
 async def _grab(label: str, coro, out: dict, key: str, fmt=_fmt) -> None:
@@ -126,9 +136,28 @@ async def main() -> None:
 
     # Clear stats: current-season Memory of Chaos / Pure Fiction / Apocalyptic
     # Shadow. previous=True variants exist if you ever want last season.
-    await _grab("Memory of Chaos", client.get_starrail_challenge(uid), out, "moc")
-    await _grab("Pure Fiction", client.get_starrail_pure_fiction(uid), out, "pf")
-    await _grab("Apocalyptic Shadow", client.get_starrail_apc_shadow(uid), out, "apc")
+    await _grab("Memory of Chaos", client.get_starrail_challenge(uid), out, "moc",
+                fmt=lambda m: _fmt(m, "moc"))
+
+    # PF / APC: stars in `pf`/`apc`, total score separately in `pf_pts`/`apc_pts`
+    # so the widget can show points as the label under the star value.
+    pf_res = {}
+    await _grab("Pure Fiction", client.get_starrail_pure_fiction(uid), pf_res, "mode",
+                fmt=lambda m: m)
+    if pf_res.get("mode") is not None:
+        if (v := _fmt(pf_res["mode"], "pf")):
+            out["pf"] = v
+        if (p := _score(pf_res["mode"])):
+            out["pf_pts"] = p
+
+    apc_res = {}
+    await _grab("Apocalyptic Shadow", client.get_starrail_apc_shadow(uid), apc_res, "mode",
+                fmt=lambda m: m)
+    if apc_res.get("mode") is not None:
+        if (v := _fmt(apc_res["mode"], "apc")):
+            out["apc"] = v
+        if (p := _score(apc_res["mode"])):
+            out["apc_pts"] = p
     await _grab(
         "Anomaly Arbitration", client.get_anomaly_arbitration(uid), out, "aa",
         fmt=_fmt_anomaly,
