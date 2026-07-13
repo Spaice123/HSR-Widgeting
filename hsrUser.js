@@ -213,7 +213,11 @@ async function syncHsrStats() {
         if (hoyo) {
             if (hoyo.moc) {
                 dynamic.push({ type: 1, name: "moc_str", value: "Memory of Chaos" });
-                dynamic.push({ type: 1, name: "moc", value: hoyo.moc }); // e.g. "Floor 12 (36★)"
+                dynamic.push({ type: 1, name: "moc", value: hoyo.moc }); // "36⭐/36⭐"
+            }
+            // *_detail: "Season Name • stars • pts • cycles" (label lines)
+            for (const k of ["moc_detail", "pf_detail", "apc_detail"]) {
+                if (hoyo[k]) dynamic.push({ type: 1, name: k, value: hoyo[k] });
             }
             if (hoyo.pf) {
                 dynamic.push({ type: 1, name: "pf_str", value: "Pure Fiction" });
@@ -231,7 +235,10 @@ async function syncHsrStats() {
             }
             if (hoyo.aa) {
                 dynamic.push({ type: 1, name: "aa_str", value: "Anomaly Arbitration" });
-                dynamic.push({ type: 1, name: "aa", value: hoyo.aa }); // e.g. "14★ • Gold"
+                dynamic.push({ type: 1, name: "aa", value: hoyo.aa }); // e.g. "7⭐"
+            }
+            if (hoyo.aa_detail) {
+                dynamic.push({ type: 1, name: "aa_detail", value: hoyo.aa_detail }); // "Knights 6⭐/9⭐ • King 1⭐"
             }
             if (hoyo.active_days != null) {
                 dynamic.push({ type: 1, name: "days_str", value: "Active Days" });
