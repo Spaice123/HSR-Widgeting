@@ -68,7 +68,7 @@ def _score(mode) -> str | None:
         return None
     top = max(floors, key=lambda f: getattr(f, "id", 0) or 0)  # id rises with stage
     score = getattr(top, "score", 0) or 0
-    return f"{score:,}" if score else None
+    return f"{score:,} pts" if score else None
 
 
 def _season_name(mode) -> str:
@@ -86,14 +86,14 @@ def _cycles(mode) -> int:
 
 def _detail(mode, key) -> str | None:
     """Compact label line (stars live in the title now):
-    MoC: 'Season: 48 cyc' | PF/APC: 'Season: 115,640'."""
+    MoC: 'Season: 48 cycles' | PF/APC: 'Season: 115,640 pts'."""
     if mode is None or getattr(mode, "has_data", True) is False:
         return None
     bits = []
     if key in ("pf", "apc") and (pts := _score(mode)):
         bits.append(pts)
     if key == "moc" and (c := _cycles(mode)):
-        bits.append(f"{c} cyc")
+        bits.append(f"{c} cycles")
     body = ", ".join(bits)
     name = _season_name(mode)
     if name and body:
@@ -101,7 +101,7 @@ def _detail(mode, key) -> str | None:
     return name or body or None
 
 
-def _anomaly_parts(data) -> tuple[str | None, str | None]:
+def _anomaly_parts(data) -> tuple[str | None, str | None, list]:
     """Parse Anomaly Arbitration from the RAW API payload.
 
     Returns (total, detail):
@@ -117,7 +117,7 @@ def _anomaly_parts(data) -> tuple[str | None, str | None]:
     """
     if not data:
         print("Anomaly Arbitration: API returned an empty payload.")
-        return None, None
+        return None, None, []
 
     recs = [r for r in (data.get("challenge_peak_records") or [])
             if r.get("has_challenge_record")]
@@ -143,14 +143,18 @@ def _anomaly_parts(data) -> tuple[str | None, str | None]:
     medal = medal_raw.replace("_", " ").strip().title()
     if not (mob or boss or medal):
         print("Anomaly Arbitration: no clear record in response; keys:", list(data.keys()))
-        return None, None
+        return None, None, []
 
     total = f"{mob + boss}⭐ • {medal}" if medal else f"{mob + boss}⭐"
 
     body = f"Knights {mob}/9⭐, King {boss}⭐"
     season = (((rec or {}).get("group") or {}).get("name_mi18n") or "").strip()
     detail = f"{season}: {body}" if season else body
-    return total, detail
+
+    # King-stage clear team (character ids; names resolved by hsrUser.js)
+    team = [a.get("id") for a in (((rec or {}).get("boss_record") or {}).get("avatars") or [])
+            if a.get("id")]
+    return total, detail, team
 
 
 async def _grab(label: str, coro, out: dict, key: str, fmt=_fmt) -> None:
@@ -232,11 +236,13 @@ async def main() -> None:
     await _grab("Anomaly Arbitration", client.get_anomaly_arbitration(uid, raw=True),
                 aa_res, "raw", fmt=lambda d: d)
     if aa_res.get("raw") is not None:
-        total, detail = _anomaly_parts(aa_res["raw"])
+        total, detail, team = _anomaly_parts(aa_res["raw"])
         if total:
             out["aa"] = total
         if detail:
             out["aa_detail"] = detail
+        if team:
+            out["aa_team_ids"] = team
 
     # General stats (active days etc.)
     try:
