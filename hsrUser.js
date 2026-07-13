@@ -55,6 +55,15 @@ const regionMap = {
     CN: "China",
 };
 
+// Cached StarRailRes character index (avatarId -> { name, portrait, ... })
+let _charsIndex = null;
+async function getCharsIndex() {
+    if (_charsIndex) return _charsIndex;
+    const { data } = await axios.get(SRRES_CHARS_URL, { timeout: 10000, headers: UA });
+    _charsIndex = data ?? {};
+    return _charsIndex;
+}
+
 // =====================================================================
 // SHOWCASED CHARACTER (rotating portrait + name label)
 // =====================================================================
@@ -75,7 +84,7 @@ async function getShowcasedCharacter(detail) {
         }
 
         if (showcased) {
-            const { data: chars } = await axios.get(SRRES_CHARS_URL, { timeout: 10000, headers: UA });
+            const chars = await getCharsIndex();
             const c = chars[String(showcased.avatarId)];
 
             if (c) {
@@ -112,27 +121,6 @@ async function getShowcasedCharacter(detail) {
     } catch (err) {
         console.warn("Could not resolve character image:", err.message);
         return { imageUrl: null, name: null, level: null, eidolon: 0 };
-    }
-}
-
-// =====================================================================
-// ACHIEVEMENT TOTAL: count of all possible achievements (StarRailRes index,
-// auto-updates each game version). Used to render "797/912".
-// =====================================================================
-async function getAchievementTotal() {
-    // Manual override (set ACH_TOTAL in the workflow env): the StarRailRes
-    // index over-counts vs the in-game total because mutually-exclusive
-    // branch achievements are listed individually and nothing marks them.
-    const override = Number(process.env.ACH_TOTAL);
-    if (Number.isFinite(override) && override > 0) return override;
-    try {
-        const { data } = await axios.get(`${SRRES_BASE}index_min/en/achievements.json`,
-            { timeout: 15000, headers: UA });
-        const n = Object.keys(data ?? {}).length;
-        return n > 0 ? n : null;
-    } catch (e) {
-        console.warn("Achievement total unavailable:", e.message);
-        return null; // fall back to plain earned count
     }
 }
 
@@ -199,12 +187,6 @@ async function syncHsrStats() {
                 ? `World ${rec.maxRogueChallengeScore}`
                 : "—";
 
-        // Achievements as earned/total (total from StarRailRes; may be null)
-        const achTotal = await getAchievementTotal();
-        const achValue = achTotal
-            ? `${rec.achievementCount ?? "-"}/${achTotal}`
-            : String(rec.achievementCount ?? "-");
-
         // ---- build the Discord dynamic payload ------------------------
         // type 1 = text, 2 = number, 3 = image
         // NOTE: Discord caps the number of dynamic fields (~30). Keep this
@@ -214,9 +196,6 @@ async function syncHsrStats() {
             { type: 1, name: "nickname", value: detail.nickname ?? "Trailblazer" },
             { type: 1, name: "uid", value: `UID ${HSR_UID}` },
             { type: 1, name: "world", value: `${region} • EQ ${detail.worldLevel ?? "-"}` },
-
-            { type: 1, name: "ach_str", value: "Achievements" },
-            { type: 1, name: "ach", value: achValue },
 
             { type: 1, name: "su_str", value: "Simulated Universe" },
             { type: 1, name: "su", value: su },
@@ -255,7 +234,22 @@ async function syncHsrStats() {
                 dynamic.push({ type: 1, name: "aa", value: hoyo.aa }); // e.g. "7⭐"
             }
             if (hoyo.aa_detail) {
-                dynamic.push({ type: 1, name: "aa_detail", value: hoyo.aa_detail }); // "Knights 6⭐/9⭐ • King 1⭐"
+                dynamic.push({ type: 1, name: "aa_detail", value: hoyo.aa_detail });
+            }
+            // King-stage clear team, resolved to names via StarRailRes
+            if (Array.isArray(hoyo.aa_team_ids) && hoyo.aa_team_ids.length > 0) {
+                try {
+                    const chars = await getCharsIndex();
+                    const names = hoyo.aa_team_ids.map((id) => {
+                        let n = chars[String(id)]?.name || `#${id}`;
+                        if (n.includes("{NICKNAME}")) n = "Trailblazer";
+                        return n;
+                    });
+                    dynamic.push({ type: 1, name: "aa_team_str", value: "Current Best Team" });
+                    dynamic.push({ type: 1, name: "aa_team", value: names.join(", ") });
+                } catch (e) {
+                    console.warn("Could not resolve AA team names:", e.message);
+                }
             }
             if (hoyo.active_days != null) {
                 dynamic.push({ type: 1, name: "days_str", value: "Active Days" });
