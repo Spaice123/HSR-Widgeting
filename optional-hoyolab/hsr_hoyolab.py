@@ -51,7 +51,7 @@ def _fmt(mode, key="moc") -> str | None:
     if mode is None or getattr(mode, "has_data", True) is False:
         return None
     stars = getattr(mode, "total_stars", 0) or 0
-    return f"{stars}⭐/{_MAX_STARS.get(key, 36)}⭐"
+    return f"{stars}/{_MAX_STARS.get(key, 36)}⭐"
 
 
 def _score(mode) -> str | None:
@@ -68,7 +68,7 @@ def _score(mode) -> str | None:
         return None
     top = max(floors, key=lambda f: getattr(f, "id", 0) or 0)  # id rises with stage
     score = getattr(top, "score", 0) or 0
-    return f"{score:,} pts" if score else None
+    return f"{score:,}" if score else None
 
 
 def _season_name(mode) -> str:
@@ -85,9 +85,8 @@ def _cycles(mode) -> int:
 
 
 def _detail(mode, key) -> str | None:
-    """Label line. MoC: 'Season • 36⭐/36⭐ • 48 cycles' (cycles consumed).
-    PF:  'Season • 12⭐/12⭐ • 115,640 pts' (points make cycles irrelevant).
-    APC: 'Season • 12⭐/12⭐ • 10,451 pts' (AV-based, no cycles)."""
+    """Compact label line (widget space is tight).
+    MoC: 'Season • 36/36⭐ • 48 cyc' | PF/APC: 'Season • 12/12⭐ • 115,640'"""
     if mode is None or getattr(mode, "has_data", True) is False:
         return None
     parts = []
@@ -98,7 +97,7 @@ def _detail(mode, key) -> str | None:
     if key in ("pf", "apc") and (pts := _score(mode)):
         parts.append(pts)
     if key == "moc" and (c := _cycles(mode)):
-        parts.append(f"{c} cycles")
+        parts.append(f"{c} cyc")
     return " • ".join(parts) if parts else None
 
 
@@ -152,10 +151,10 @@ def _anomaly_parts(data) -> tuple[str | None, str | None]:
     season = (((rec or {}).get("group") or {}).get("name_mi18n") or "").strip()
     if season:
         parts.append(season)
-    parts.append(f"Knights {mob}⭐/9⭐ • King {boss}⭐")
+    parts.append(f"Kn {mob}/9⭐ • King {boss}⭐")
     cycles = (rec or {}).get("battle_num") or 0
     if cycles:
-        parts.append(f"{cycles} cycles")
+        parts.append(f"{cycles} cyc")
     return total, " • ".join(parts)
 
 
