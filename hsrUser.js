@@ -217,11 +217,17 @@ async function syncHsrStats() {
             }
             if (hoyo.pf) {
                 dynamic.push({ type: 1, name: "pf_str", value: "Pure Fiction" });
-                dynamic.push({ type: 1, name: "pf", value: hoyo.pf });
+                dynamic.push({ type: 1, name: "pf", value: hoyo.pf }); // "12⭐/12⭐"
+            }
+            if (hoyo.pf_pts) {
+                dynamic.push({ type: 1, name: "pf_pts", value: hoyo.pf_pts }); // "30,000 pts"
             }
             if (hoyo.apc) {
                 dynamic.push({ type: 1, name: "apc_str", value: "Apocalyptic Shadow" });
                 dynamic.push({ type: 1, name: "apc", value: hoyo.apc });
+            }
+            if (hoyo.apc_pts) {
+                dynamic.push({ type: 1, name: "apc_pts", value: hoyo.apc_pts });
             }
             if (hoyo.aa) {
                 dynamic.push({ type: 1, name: "aa_str", value: "Anomaly Arbitration" });
