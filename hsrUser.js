@@ -221,23 +221,25 @@ async function syncHsrStats() {
         // ---- Tier B: MoC / Pure Fiction / Apocalyptic Shadow ----------
         const hoyo = readHoyoStats();
         if (hoyo) {
+            // Titles carry the star counts, e.g. "Memory of Chaos 36/36⭐";
+            // labels (\*_detail) carry season + pts/cycles.
             if (hoyo.moc) {
-                dynamic.push({ type: 1, name: "moc_str", value: "Memory of Chaos" });
-                dynamic.push({ type: 1, name: "moc", value: hoyo.moc }); // "36⭐/36⭐"
+                dynamic.push({ type: 1, name: "moc_str", value: `Memory of Chaos ${hoyo.moc}` });
+                dynamic.push({ type: 1, name: "moc", value: hoyo.moc });
             }
             // *_detail: "Season Name • stars • pts • cycles" (label lines)
             for (const k of ["moc_detail", "pf_detail", "apc_detail"]) {
                 if (hoyo[k]) dynamic.push({ type: 1, name: k, value: hoyo[k] });
             }
             if (hoyo.pf) {
-                dynamic.push({ type: 1, name: "pf_str", value: "Pure Fiction" });
-                dynamic.push({ type: 1, name: "pf", value: hoyo.pf }); // "12⭐/12⭐"
+                dynamic.push({ type: 1, name: "pf_str", value: `Pure Fiction ${hoyo.pf}` });
+                dynamic.push({ type: 1, name: "pf", value: hoyo.pf });
             }
             if (hoyo.pf_pts) {
                 dynamic.push({ type: 1, name: "pf_pts", value: hoyo.pf_pts }); // "30,000 pts"
             }
             if (hoyo.apc) {
-                dynamic.push({ type: 1, name: "apc_str", value: "Apocalyptic Shadow" });
+                dynamic.push({ type: 1, name: "apc_str", value: `Apocalyptic Shadow ${hoyo.apc}` });
                 dynamic.push({ type: 1, name: "apc", value: hoyo.apc });
             }
             if (hoyo.apc_pts) {
