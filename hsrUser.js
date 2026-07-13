@@ -120,6 +120,11 @@ async function getShowcasedCharacter(detail) {
 // auto-updates each game version). Used to render "797/912".
 // =====================================================================
 async function getAchievementTotal() {
+    // Manual override (set ACH_TOTAL in the workflow env): the StarRailRes
+    // index over-counts vs the in-game total because mutually-exclusive
+    // branch achievements are listed individually and nothing marks them.
+    const override = Number(process.env.ACH_TOTAL);
+    if (Number.isFinite(override) && override > 0) return override;
     try {
         const { data } = await axios.get(`${SRRES_BASE}index_min/en/achievements.json`,
             { timeout: 15000, headers: UA });
@@ -178,7 +183,7 @@ async function syncHsrStats() {
         const { imageUrl } = character;
         const characterLabel = character.name
             ? `${character.name}${character.level ? ` • Lv. ${character.level}` : ""}` +
-              `${character.eidolon ? ` • E${character.eidolon}` : ""}`
+              ` • E${character.eidolon ?? 0}` // always shown, including E0
             : null;
 
         if (imageUrl) console.log(`Character image: ${imageUrl}`);
