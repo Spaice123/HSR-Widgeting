@@ -80,12 +80,14 @@ def _season_name(mode) -> str:
 
 
 def _cycles(mode) -> int:
-    """Total cycles used across all cleared floors (MoC/PF; APC is AV-based)."""
+    """Cycles CONSUMED across all cleared floors (sum of per-floor round_num)."""
     return sum((getattr(f, "round_num", 0) or 0) for f in (getattr(mode, "floors", None) or []))
 
 
 def _detail(mode, key) -> str | None:
-    """Label line: 'Season Name • 12⭐/12⭐ • 115,640 pts • 7 cycles'."""
+    """Label line. MoC: 'Season • 36⭐/36⭐ • 48 cycles' (cycles consumed).
+    PF:  'Season • 12⭐/12⭐ • 115,640 pts' (points make cycles irrelevant).
+    APC: 'Season • 12⭐/12⭐ • 10,451 pts' (AV-based, no cycles)."""
     if mode is None or getattr(mode, "has_data", True) is False:
         return None
     parts = []
@@ -95,7 +97,7 @@ def _detail(mode, key) -> str | None:
         parts.append(stars)
     if key in ("pf", "apc") and (pts := _score(mode)):
         parts.append(pts)
-    if key in ("moc", "pf") and (c := _cycles(mode)):
+    if key == "moc" and (c := _cycles(mode)):
         parts.append(f"{c} cycles")
     return " • ".join(parts) if parts else None
 
