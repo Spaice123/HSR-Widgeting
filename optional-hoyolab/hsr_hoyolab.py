@@ -85,12 +85,11 @@ def _cycles(mode) -> int:
 
 
 def _detail(mode, key) -> str | None:
-    """Compact label line: 'Season: 36/36⭐, 48 cyc' / 'Season: 12/12⭐, 115,640'."""
+    """Compact label line (stars live in the title now):
+    MoC: 'Season: 48 cyc' | PF/APC: 'Season: 115,640'."""
     if mode is None or getattr(mode, "has_data", True) is False:
         return None
     bits = []
-    if (stars := _fmt(mode, key)):
-        bits.append(stars)
     if key in ("pf", "apc") and (pts := _score(mode)):
         bits.append(pts)
     if key == "moc" and (c := _cycles(mode)):
@@ -148,11 +147,7 @@ def _anomaly_parts(data) -> tuple[str | None, str | None]:
 
     total = f"{mob + boss}⭐ • {medal}" if medal else f"{mob + boss}⭐"
 
-    bits = [f"Kn {mob}/9⭐", f"King {boss}⭐"]
-    cycles = (rec or {}).get("battle_num") or 0
-    if cycles:
-        bits.append(f"{cycles} cyc")
-    body = ", ".join(bits)
+    body = f"Knights {mob}/9⭐, King {boss}⭐"
     season = (((rec or {}).get("group") or {}).get("name_mi18n") or "").strip()
     detail = f"{season}: {body}" if season else body
     return total, detail
