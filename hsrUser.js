@@ -1,71 +1,324 @@
-name: Update HSR Widget
+// =====================================================================
+//  Honkai: Star Rail — Discord Dynamic Profile Widget updater
+//  Port of MeYashverma/Genshin-Stats (enkaUser.js) for HSR.
+//
+//  Tier A (this file, NO login required):
+//    Pulls PUBLIC stats from Enka.Network's HSR endpoint and a rotating
+//    showcase character from your in-game profile. No HoyoLab cookie.
+//
+//  Tier B (optional): if a `hoyo_stats.json` file exists next to this
+//    script (produced by optional-hoyolab/hsr_hoyolab.py), the Memory of
+//    Chaos / Pure Fiction / Apocalyptic Shadow fields are merged into the
+//    same single Discord PATCH. See README.
+// =====================================================================
 
-on:
-  workflow_dispatch:
-  schedule:
-    # Every 6 hours (matches ROTATE_HOURS default). Lower this if you rotate faster.
-    - cron: "0 */6 * * *"
+if (process.env.GITHUB_ACTIONS !== "true") {
+    require("dotenv").config();
+}
+const axios = require("axios");
+const fs = require("fs");
+const path = require("path");
 
-permissions:
-  contents: read
+// ---- config -----------------------------------------------------------
+const HSR_UID = process.env.HSR_UID;
+const ENKA_HSR_URL = `https://enka.network/api/hsr/uid/${HSR_UID}`;
 
-jobs:
-  update:
-    runs-on: ubuntu-latest
-    timeout-minutes: 6
-    env:
-      # secrets are not allowed in step-level `if:`; route through job env instead
-      HAS_HOYO: ${{ secrets.HOYO_LTUID_V2 != '' }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+// StarRailRes (Mar-7th): community-standard asset index, keyed directly by
+// avatarId. Auto-updates for new characters — nothing to maintain locally.
+const SRRES_BASE = "https://raw.githubusercontent.com/Mar-7th/StarRailRes/master/";
+const SRRES_CHARS_URL = `${SRRES_BASE}index_min/en/characters.json`;
 
-      # ---- Tier B (optional): fetch MoC / PF / Apocalyptic Shadow via HoyoLab ----
-      # Runs only if you set the HOYO_LTUID_V2 secret. Produces hoyo_stats.json,
-      # which hsrUser.js merges into the same single Discord PATCH.
-      - name: Setup Python
-        if: env.HAS_HOYO == 'true'
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
+// Enka HSR profile-picture map (only used as a fallback image).
+const ENKA_PFPS_URL =
+    "https://raw.githubusercontent.com/EnkaNetwork/API-docs/master/store/hsr/pfps.json";
+const ENKA_UI_BASE = "https://enka.network"; // pfp iconPath already starts with /ui/hsr/...
 
-      - name: Fetch HoyoLab battle stats (optional)
-        if: env.HAS_HOYO == 'true'
-        env:
-          HSR_UID: ${{ secrets.HSR_UID }}
-          HOYO_LTUID_V2: ${{ secrets.HOYO_LTUID_V2 }}
-          # Auto-refresh (recommended): set via optional-hoyolab/get_stoken.py.
-          # A fresh ltoken_v2 is minted from the stoken on every run.
-          HOYO_STOKEN: ${{ secrets.HOYO_STOKEN }}
-          HOYO_MID: ${{ secrets.HOYO_MID }}
-          # Fallback only, used when HOYO_STOKEN is unset (expires periodically):
-          HOYO_LTOKEN_V2: ${{ secrets.HOYO_LTOKEN_V2 }}
-        run: |
-          pip install -r optional-hoyolab/requirements.txt
-          python optional-hoyolab/hsr_hoyolab.py
+const DISCORD_CLIENT_ID = process.env.DISCORD_CLIENT_ID;
+const DISCORD_USER_ID = process.env.DISCORD_USER_ID;
+const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN;
 
-      # ---- Tier A (required): public Enka stats + rotating character + PATCH ----
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
+// Optional SECOND widget application: set DISCORD_CLIENT_ID_2 and
+// DISCORD_BOT_TOKEN_2 secrets and the same payload is PATCHed to both apps
+// (same user). Leave unset for single-widget behaviour.
+const DISCORD_TARGETS = [
+    { clientId: DISCORD_CLIENT_ID, botToken: DISCORD_BOT_TOKEN },
+];
+if (process.env.DISCORD_CLIENT_ID_2 && process.env.DISCORD_BOT_TOKEN_2) {
+    DISCORD_TARGETS.push({
+        clientId: process.env.DISCORD_CLIENT_ID_2,
+        botToken: process.env.DISCORD_BOT_TOKEN_2,
+    });
+}
 
-      - name: Install dependencies
-        run: npm ci || npm install
+// How often the displayed character rotates (in hours). Should match (or be
+// a multiple of) the GitHub Actions cron schedule.
+const ROTATE_HOURS = Number(process.env.ROTATE_HOURS ?? 6);
 
-      - name: Run HSR widget updater
-        env:
-          HSR_UID: ${{ secrets.HSR_UID }}
-          DISCORD_CLIENT_ID: ${{ secrets.DISCORD_CLIENT_ID }}
-          DISCORD_USER_ID: ${{ secrets.DISCORD_USER_ID }}
-          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
-          # Optional second widget app (leave secrets unset if not used):
-          DISCORD_CLIENT_ID_2: ${{ secrets.DISCORD_CLIENT_ID_2 }}
-          DISCORD_BOT_TOKEN_2: ${{ secrets.DISCORD_BOT_TOKEN_2 }}
-          ROTATE_HOURS: 6
-          # In-game achievement maximum. Update when a game patch adds
-          # achievements; delete this line to fall back to the StarRailRes
-          # index count (which over-counts mutually-exclusive branches).
-          ACH_TOTAL: 1748
-        run: node hsrUser.js
+// ---- static progress bars (edit the percents here when they change) ----
+// Each bar pushes two fields: <key>_str (title text) and <key> (number 0-100
+// for the widget's progress-bar presentation; set the bar's max to 100).
+const PROGRESS_BARS = [
+    { key: "bar_rem", label: "Progress toward ideal Mono Rem team (14 cost)", percent: 50 },
+    { key: "bar_5050", label: "Progress toward next 50/50", percent: 72 },
+];
+
+// Enka asks API consumers to send a descriptive User-Agent.
+const UA = { "User-Agent": "HSR-Stats-Widget/1.0 (+github-actions)" };
+
+// ---- region formatting ------------------------------------------------
+const regionMap = {
+    ASIA: "Asia",
+    EUR: "Europe",
+    EUROPE: "Europe",
+    USA: "America",
+    AMERICA: "America",
+    CHT: "TW/HK/MO",
+    CN: "China",
+};
+
+// Cached StarRailRes character index (avatarId -> { name, portrait, ... })
+let _charsIndex = null;
+async function getCharsIndex() {
+    if (_charsIndex) return _charsIndex;
+    const { data } = await axios.get(SRRES_CHARS_URL, { timeout: 10000, headers: UA });
+    _charsIndex = data ?? {};
+    return _charsIndex;
+}
+
+// =====================================================================
+// SHOWCASED CHARACTER (rotating portrait + name label)
+// =====================================================================
+async function getShowcasedCharacter(detail) {
+    try {
+        const showcase = detail.avatarDetailList ?? [];
+        let showcased = null;
+
+        if (showcase.length > 0) {
+            // Time-based slot: no state file needed, each scheduled run
+            // lands on the next showcase slot.
+            const rotationIndex =
+                Math.floor(Date.now() / (ROTATE_HOURS * 3600 * 1000)) % showcase.length;
+            showcased = showcase[rotationIndex];
+            console.log(
+                `Rotation: slot ${rotationIndex + 1}/${showcase.length} (changes every ${ROTATE_HOURS}h)`
+            );
+        }
+
+        if (showcased) {
+            const chars = await getCharsIndex();
+            const c = chars[String(showcased.avatarId)];
+
+            if (c) {
+                // Trailblazer entries store the name as "{NICKNAME}".
+                let name = c.name;
+                if (!name || name.includes("{NICKNAME}")) {
+                    name = detail.nickname || "Trailblazer";
+                }
+
+                // Big splash art. Swap `portrait` -> `preview` or `icon` for
+                // a tighter crop.
+                const imageUrl = c.portrait ? `${SRRES_BASE}${c.portrait}` : null;
+
+                return {
+                    imageUrl,
+                    name,
+                    level: showcased.level ?? null,
+                    eidolon: showcased.rank ?? 0, // rank == eidolon; absent means 0
+                };
+            }
+        }
+
+        // Fallback: player's in-game profile picture via Enka's HSR pfp map.
+        const pfpId = detail.headIcon;
+        if (pfpId) {
+            const { data: pfps } = await axios.get(ENKA_PFPS_URL, { timeout: 10000, headers: UA });
+            const iconPath = pfps[String(pfpId)]?.Icon;
+            if (iconPath) {
+                return { imageUrl: `${ENKA_UI_BASE}${iconPath}`, name: null, level: null, eidolon: 0 };
+            }
+        }
+
+        return { imageUrl: null, name: null, level: null, eidolon: 0 };
+    } catch (err) {
+        console.warn("Could not resolve character image:", err.message);
+        return { imageUrl: null, name: null, level: null, eidolon: 0 };
+    }
+}
+
+// =====================================================================
+// OPTIONAL TIER B: merge HoyoLab battle stats if the helper produced them
+// =====================================================================
+const HOYO_STATS_MAX_AGE_H = Number(process.env.HOYO_STATS_MAX_AGE_H ?? 48);
+
+function readHoyoStats() {
+    try {
+        const p = path.join(__dirname, "hoyo_stats.json");
+        if (!fs.existsSync(p)) return null;
+        const data = JSON.parse(fs.readFileSync(p, "utf8"));
+
+        // Freshness guard: if the Python step has been failing (e.g. expired
+        // cookie) a stale committed file shouldn't show outdated clears.
+        if (data.generated_at) {
+            const ageH = (Date.now() / 1000 - data.generated_at) / 3600;
+            if (ageH > HOYO_STATS_MAX_AGE_H) {
+                console.warn(
+                    `hoyo_stats.json is ${ageH.toFixed(1)}h old (limit ${HOYO_STATS_MAX_AGE_H}h) — ` +
+                    "skipping clear stats. Is the HoyoLab cookie expired?"
+                );
+                return null;
+            }
+        }
+
+        console.log("Found hoyo_stats.json — merging MoC/PF/APC fields.");
+        return data;
+    } catch (e) {
+        console.warn("Could not read hoyo_stats.json:", e.message);
+        return null;
+    }
+}
+
+// =====================================================================
+async function syncHsrStats() {
+    try {
+        const res = await axios.get(ENKA_HSR_URL, { timeout: 10000, headers: UA });
+        const detail = res.data.detailInfo;
+        if (!detail) throw new Error("Player profile is private or not found.");
+
+        const rec = detail.recordInfo ?? {};
+        const region = regionMap[res.data.region] ?? res.data.region ?? "Unknown";
+
+        // ---- resolve rotating character -------------------------------
+        const character = await getShowcasedCharacter(detail);
+        const { imageUrl } = character;
+        const characterLabel = character.name
+            ? `${character.name}${character.level ? ` • Lv. ${character.level}` : ""}` +
+              ` • E${character.eidolon ?? 0}` // always shown, including E0
+            : null;
+
+        if (imageUrl) console.log(`Character image: ${imageUrl}`);
+        if (characterLabel) console.log(`Character: ${characterLabel}`);
+
+        const signature =
+            detail.signature && detail.signature.trim() !== ""
+                ? `"${detail.signature.substring(0, 60)}"`
+                : '"No signature"';
+
+        const su =
+            rec.maxRogueChallengeScore != null && rec.maxRogueChallengeScore > 0
+                ? `World ${rec.maxRogueChallengeScore}`
+                : "—";
+
+        // ---- build the Discord dynamic payload ------------------------
+        // type 1 = text, 2 = number, 3 = image
+        // NOTE: Discord caps the number of dynamic fields (~30). Keep this
+        // list lean — unused fields (tb/eq/col/sig/mini) were removed to make
+        // room for the *_detail label lines.
+        const dynamic = [
+            { type: 1, name: "nickname", value: detail.nickname ?? "Trailblazer" },
+            { type: 1, name: "uid", value: `UID ${HSR_UID}` },
+            { type: 1, name: "world", value: `${region} • EQ ${detail.worldLevel ?? "-"}` },
+
+            { type: 1, name: "su_str", value: "Simulated Universe" },
+            { type: 1, name: "su", value: su },
+        ];
+
+        // Static progress bars (values maintained by hand at the top of file)
+        for (const bar of PROGRESS_BARS) {
+            dynamic.push({ type: 1, name: `${bar.key}_str`, value: bar.label });
+            dynamic.push({ type: 2, name: bar.key, value: bar.percent });
+        }
+        void signature; // kept for potential future use
+
+        // ---- Tier B: MoC / Pure Fiction / Apocalyptic Shadow ----------
+        const hoyo = readHoyoStats();
+        if (hoyo) {
+            // Titles carry the star counts, e.g. "Memory of Chaos 36/36⭐";
+            // labels (\*_detail) carry season + pts/cycles.
+            if (hoyo.moc) {
+                dynamic.push({ type: 1, name: "moc_str", value: `Memory of Chaos ${hoyo.moc}` });
+                dynamic.push({ type: 1, name: "moc", value: hoyo.moc });
+            }
+            // *_detail: "Season Name • stars • pts • cycles" (label lines)
+            for (const k of ["moc_detail", "pf_detail", "apc_detail"]) {
+                if (hoyo[k]) dynamic.push({ type: 1, name: k, value: hoyo[k] });
+            }
+            if (hoyo.pf) {
+                dynamic.push({ type: 1, name: "pf_str", value: `Pure Fiction ${hoyo.pf}` });
+                dynamic.push({ type: 1, name: "pf", value: hoyo.pf });
+            }
+            if (hoyo.pf_pts) {
+                dynamic.push({ type: 1, name: "pf_pts", value: hoyo.pf_pts }); // "30,000 pts"
+            }
+            if (hoyo.apc) {
+                dynamic.push({ type: 1, name: "apc_str", value: `Apocalyptic Shadow ${hoyo.apc}` });
+                dynamic.push({ type: 1, name: "apc", value: hoyo.apc });
+            }
+            if (hoyo.apc_pts) {
+                dynamic.push({ type: 1, name: "apc_pts", value: hoyo.apc_pts });
+            }
+            if (hoyo.aa) {
+                dynamic.push({ type: 1, name: "aa_str", value: "Anomaly Arbitration" });
+                dynamic.push({ type: 1, name: "aa", value: hoyo.aa }); // e.g. "7⭐"
+            }
+            if (hoyo.aa_detail) {
+                dynamic.push({ type: 1, name: "aa_detail", value: hoyo.aa_detail });
+            }
+            // King-stage clear team, resolved to names via StarRailRes
+            if (Array.isArray(hoyo.aa_team_ids) && hoyo.aa_team_ids.length > 0) {
+                try {
+                    const chars = await getCharsIndex();
+                    const names = hoyo.aa_team_ids.map((id) => {
+                        let n = chars[String(id)]?.name || `#${id}`;
+                        if (n.includes("{NICKNAME}")) n = "Trailblazer";
+                        return n;
+                    });
+                    dynamic.push({ type: 1, name: "aa_team_str", value: "Current Best Team" });
+                    dynamic.push({ type: 1, name: "aa_team", value: names.join(", ") });
+                } catch (e) {
+                    console.warn("Could not resolve AA team names:", e.message);
+                }
+            }
+            if (hoyo.active_days != null) {
+                dynamic.push({ type: 1, name: "days_str", value: "Active Days" });
+                dynamic.push({ type: 1, name: "days_txt", value: String(hoyo.active_days) });
+            }
+        }
+
+        if (imageUrl) {
+            dynamic.push({ type: 3, name: "image", value: { url: imageUrl } });
+        }
+        if (characterLabel) {
+            dynamic.push({ type: 1, name: "char", value: characterLabel });
+        }
+
+        const payload = { data: { dynamic } };
+
+        // ---- PATCH every configured Discord widget app -----------------
+        for (const target of DISCORD_TARGETS) {
+            const discordApiUrl =
+                `https://discord.com/api/v9/applications/${target.clientId}` +
+                `/users/${DISCORD_USER_ID}/identities/0/profile`;
+
+            const response = await axios.patch(discordApiUrl, payload, {
+                headers: {
+                    Authorization: `Bot ${target.botToken}`,
+                    "Content-Type": "application/json",
+                },
+            });
+
+            console.log(`Synced HSR widget (app ${target.clientId}) for ` +
+                `${detail.nickname}. Status: ${response.status}`);
+        }
+    } catch (error) {
+        if (error.response) {
+            console.error("Discord/Enka API Error:", error.response.status,
+                JSON.stringify(error.response.data, null, 2));
+            process.exit(1);
+        } else {
+            console.error("Request Error:", error.message);
+            process.exit(1);
+        }
+    }
+}
+
+syncHsrStats();
