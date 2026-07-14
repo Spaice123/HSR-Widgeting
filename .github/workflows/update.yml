@@ -60,5 +60,12 @@ jobs:
           DISCORD_CLIENT_ID: ${{ secrets.DISCORD_CLIENT_ID }}
           DISCORD_USER_ID: ${{ secrets.DISCORD_USER_ID }}
           DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          # Optional second widget app (leave secrets unset if not used):
+          DISCORD_CLIENT_ID_2: ${{ secrets.DISCORD_CLIENT_ID_2 }}
+          DISCORD_BOT_TOKEN_2: ${{ secrets.DISCORD_BOT_TOKEN_2 }}
           ROTATE_HOURS: 6
+          # In-game achievement maximum. Update when a game patch adds
+          # achievements; delete this line to fall back to the StarRailRes
+          # index count (which over-counts mutually-exclusive branches).
+          ACH_TOTAL: 1748
         run: node hsrUser.js
