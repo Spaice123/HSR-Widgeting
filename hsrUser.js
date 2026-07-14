@@ -37,9 +37,30 @@ const DISCORD_CLIENT_ID = process.env.DISCORD_CLIENT_ID;
 const DISCORD_USER_ID = process.env.DISCORD_USER_ID;
 const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN;
 
+// Optional SECOND widget application: set DISCORD_CLIENT_ID_2 and
+// DISCORD_BOT_TOKEN_2 secrets and the same payload is PATCHed to both apps
+// (same user). Leave unset for single-widget behaviour.
+const DISCORD_TARGETS = [
+    { clientId: DISCORD_CLIENT_ID, botToken: DISCORD_BOT_TOKEN },
+];
+if (process.env.DISCORD_CLIENT_ID_2 && process.env.DISCORD_BOT_TOKEN_2) {
+    DISCORD_TARGETS.push({
+        clientId: process.env.DISCORD_CLIENT_ID_2,
+        botToken: process.env.DISCORD_BOT_TOKEN_2,
+    });
+}
+
 // How often the displayed character rotates (in hours). Should match (or be
 // a multiple of) the GitHub Actions cron schedule.
 const ROTATE_HOURS = Number(process.env.ROTATE_HOURS ?? 6);
+
+// ---- static progress bars (edit the percents here when they change) ----
+// Each bar pushes two fields: <key>_str (title text) and <key> (number 0-100
+// for the widget's progress-bar presentation; set the bar's max to 100).
+const PROGRESS_BARS = [
+    { key: "bar_rem", label: "Progress toward ideal Mono Rem team (14 cost)", percent: 50 },
+    { key: "bar_5050", label: "Progress toward next 50/50", percent: 72 },
+];
 
 // Enka asks API consumers to send a descriptive User-Agent.
 const UA = { "User-Agent": "HSR-Stats-Widget/1.0 (+github-actions)" };
@@ -200,6 +221,12 @@ async function syncHsrStats() {
             { type: 1, name: "su_str", value: "Simulated Universe" },
             { type: 1, name: "su", value: su },
         ];
+
+        // Static progress bars (values maintained by hand at the top of file)
+        for (const bar of PROGRESS_BARS) {
+            dynamic.push({ type: 1, name: `${bar.key}_str`, value: bar.label });
+            dynamic.push({ type: 2, name: bar.key, value: bar.percent });
+        }
         void signature; // kept for potential future use
 
         // ---- Tier B: MoC / Pure Fiction / Apocalyptic Shadow ----------
@@ -266,19 +293,22 @@ async function syncHsrStats() {
 
         const payload = { data: { dynamic } };
 
-        // ---- PATCH the Discord widget ---------------------------------
-        const discordApiUrl =
-            `https://discord.com/api/v9/applications/${DISCORD_CLIENT_ID}` +
-            `/users/${DISCORD_USER_ID}/identities/0/profile`;
+        // ---- PATCH every configured Discord widget app -----------------
+        for (const target of DISCORD_TARGETS) {
+            const discordApiUrl =
+                `https://discord.com/api/v9/applications/${target.clientId}` +
+                `/users/${DISCORD_USER_ID}/identities/0/profile`;
 
-        const response = await axios.patch(discordApiUrl, payload, {
-            headers: {
-                Authorization: `Bot ${DISCORD_BOT_TOKEN}`,
-                "Content-Type": "application/json",
-            },
-        });
+            const response = await axios.patch(discordApiUrl, payload, {
+                headers: {
+                    Authorization: `Bot ${target.botToken}`,
+                    "Content-Type": "application/json",
+                },
+            });
 
-        console.log(`Synced HSR widget for ${detail.nickname}. Status: ${response.status}`);
+            console.log(`Synced HSR widget (app ${target.clientId}) for ` +
+                `${detail.nickname}. Status: ${response.status}`);
+        }
     } catch (error) {
         if (error.response) {
             console.error("Discord/Enka API Error:", error.response.status,
