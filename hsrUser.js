@@ -293,20 +293,43 @@ async function syncHsrStats() {
 
         const payload = { data: { dynamic } };
 
+        // ---- Genshin payload (second app only): gi_* fields from Tier B ----
+        const GI_TITLES = {
+            gi_days: "Days Active",
+            gi_ach: "Achievements",
+            gi_abyss: "Spiral Abyss",
+            gi_it: "Imaginarium Theater",
+            gi_so: "Stygian Onslaught",
+            gi_chests: "Exquisite Chests",
+        };
+        const giDynamic = [];
+        for (const [key, title] of Object.entries(GI_TITLES)) {
+            if (hoyo && hoyo[key] != null && hoyo[key] !== "") {
+                giDynamic.push({ type: 1, name: `${key}_str`, value: title });
+                giDynamic.push({ type: 1, name: key, value: String(hoyo[key]) });
+            }
+        }
+        const giPayload = giDynamic.length > 0 ? { data: { dynamic: giDynamic } } : null;
+
         // ---- PATCH every configured Discord widget app -----------------
-        for (const target of DISCORD_TARGETS) {
+        // App 1 gets the HSR payload; app 2 gets the Genshin payload when
+        // Genshin data exists (each app has its own ~30-field cap).
+        for (let i = 0; i < DISCORD_TARGETS.length; i++) {
+            const target = DISCORD_TARGETS[i];
+            const body = i === 1 && giPayload ? giPayload : payload;
+            const game = i === 1 && giPayload ? "Genshin" : "HSR";
             const discordApiUrl =
                 `https://discord.com/api/v9/applications/${target.clientId}` +
                 `/users/${DISCORD_USER_ID}/identities/0/profile`;
 
-            const response = await axios.patch(discordApiUrl, payload, {
+            const response = await axios.patch(discordApiUrl, body, {
                 headers: {
                     Authorization: `Bot ${target.botToken}`,
                     "Content-Type": "application/json",
                 },
             });
 
-            console.log(`Synced HSR widget (app ${target.clientId}) for ` +
+            console.log(`Synced ${game} widget (app ${target.clientId}) for ` +
                 `${detail.nickname}. Status: ${response.status}`);
         }
     } catch (error) {
