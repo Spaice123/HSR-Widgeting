@@ -157,6 +157,34 @@ def _anomaly_parts(data) -> tuple[str | None, str | None, list]:
     return total, detail, team
 
 
+_ROMAN = {1: "I", 2: "II", 3: "III", 4: "IV", 5: "V", 6: "VI", 7: "VII"}
+
+
+def _genshin_fields(stats) -> dict:
+    """Map Genshin index stats to gi_* widget fields (HSR naming scheme).
+
+    Covers: days active, achievements, Spiral Abyss, Imaginarium Theater,
+    Stygian Onslaught, exquisite chests — all from the single index call.
+    """
+    out = {}
+    if (v := getattr(stats, "days_active", None)) is not None:
+        out["gi_days"] = str(v)
+    if (v := getattr(stats, "achievements", None)) is not None:
+        out["gi_ach"] = str(v)
+    if (v := getattr(stats, "spiral_abyss", None)):
+        out["gi_abyss"] = str(v)
+    if (v := getattr(stats, "exquisite_chests", None)) is not None:
+        out["gi_chests"] = f"{v:,}"
+    th = getattr(stats, "theater", None)
+    if th is not None and getattr(th, "has_data", False):
+        out["gi_it"] = f"Act {getattr(th, 'max_act', 0)}"
+    st = getattr(stats, "stygian", None)
+    if st is not None and getattr(st, "has_data", False):
+        d = getattr(st, "difficulty", 0) or 0
+        out["gi_so"] = _ROMAN.get(d, str(d))
+    return out
+
+
 async def _grab(label: str, coro, out: dict, key: str, fmt=_fmt) -> None:
     try:
         value = fmt(await coro)
@@ -250,6 +278,19 @@ async def main() -> None:
         out["active_days"] = user.stats.active_days
     except Exception as e:  # noqa: BLE001
         print("Stats fetch failed:", e)
+
+    # Genshin Impact stats (optional): same HoYoverse account, same stoken.
+    # Fields feed the SECOND widget app; see GI_TITLES in hsrUser.js.
+    gi_uid = os.environ.get("GENSHIN_UID", "").strip()
+    if gi_uid:
+        try:
+            gi_client = genshin.Client(cookies, game=genshin.Game.GENSHIN)
+            gi = await gi_client.get_partial_genshin_user(int(gi_uid))
+            fields = _genshin_fields(gi.stats)
+            out.update(fields)
+            print(f"Genshin stats: {sorted(fields)}")
+        except Exception as e:  # noqa: BLE001
+            print("Genshin stats fetch failed:", e)
 
     # Write next to hsrUser.js (repo root = parent of this file's folder)
     target = Path(__file__).resolve().parent.parent / "hoyo_stats.json"
