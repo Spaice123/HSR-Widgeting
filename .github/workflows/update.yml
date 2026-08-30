@@ -33,6 +33,8 @@ jobs:
         if: env.HAS_HOYO == 'true'
         env:
           HSR_UID: ${{ secrets.HSR_UID }}
+          # Optional: Genshin UID on the same HoYoverse account -> gi_* fields
+          GENSHIN_UID: ${{ secrets.GENSHIN_UID }}
           HOYO_LTUID_V2: ${{ secrets.HOYO_LTUID_V2 }}
           # Auto-refresh (recommended): set via optional-hoyolab/get_stoken.py.
           # A fresh ltoken_v2 is minted from the stoken on every run.
